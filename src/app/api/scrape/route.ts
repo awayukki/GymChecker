@@ -11,7 +11,10 @@ export async function GET(request: Request) {
     const isProduction = process.env.NODE_ENV === 'production';
     console.log('環境チェック:', { NODE_ENV: process.env.NODE_ENV, isProduction });
     
-    if (isProduction) {
+    // デバッグ用：常に本番環境モードでテスト
+    const forceProduction = true;
+    
+    if (isProduction || forceProduction) {
       console.log('本番環境モードでスクレイピングを開始します');
       // Vercel本番環境用の設定
       let executablePath;
@@ -186,7 +189,7 @@ export async function GET(request: Request) {
               const name = inputElement.name || '';
               const id = inputElement.id || '';
               
-              // 隣接するテキストを確認
+              // 隣接するテキストを確認（より広範囲に検索）
               const parent = inputElement.parentElement;
               const parentText = parent?.textContent?.trim() || '';
               const nextSibling = inputElement.nextElementSibling;
@@ -194,19 +197,40 @@ export async function GET(request: Request) {
               const prevSibling = inputElement.previousElementSibling;
               const prevText = prevSibling?.textContent?.trim() || '';
               
+              // 祖父母要素も確認
+              const grandParent = parent?.parentElement;
+              const grandParentText = grandParent?.textContent?.trim() || '';
+              
+              // ラベル要素も確認
+              let labelText = '';
+              const label = document.querySelector(`label[for="${id}"]`);
+              if (label) {
+                labelText = label.textContent?.trim() || '';
+              }
+              
               console.log('入力要素チェック:', {
-                value, name, id, parentText, nextText, prevText
+                value, name, id, parentText, nextText, prevText, grandParentText, labelText
               });
               
-              // バドミントンを示すキーワードで検索
+              // バドミントンを示すキーワードで検索（より厳密に）
               if (value.includes('バドミントン') || 
                   name.includes('バドミントン') ||
                   id.includes('バドミントン') ||
                   parentText.includes('バドミントン') ||
                   nextText.includes('バドミントン') ||
-                  prevText.includes('バドミントン')) {
-                console.log('バドミントン要素発見:', { value, name, id });
-                return `input[value="${value}"]`;
+                  prevText.includes('バドミントン') ||
+                  grandParentText.includes('バドミントン') ||
+                  labelText.includes('バドミントン')) {
+                console.log('バドミントン要素発見:', { value, name, id, selector: `input[value="${value}"]` });
+                
+                // valueが"true"のような汎用的な値の場合は、より具体的なセレクターを使用
+                if (value === 'true' || value === '1' || value === 'on') {
+                  if (name) return `input[name="${name}"]`;
+                  if (id) return `#${id}`;
+                  return `input[value="${value}"]`;
+                } else {
+                  return `input[value="${value}"]`;
+                }
               }
             }
             
@@ -297,180 +321,335 @@ export async function GET(request: Request) {
               await page.waitForNavigation({ waitUntil: 'networkidle0' });
               console.log('検索を実行しました');
               
-              // 検索結果ページのタイトルとURLを確認
-              const resultPageInfo = await page.evaluate(() => ({
-                title: document.title,
-                url: location.href,
-                hasTable: !!document.querySelector('table'),
-                hasCalendar: !!document.querySelector('.calendar, #calendar'),
-                hasResults: !!document.querySelector('.result, .search-result')
-              }));
+              // カレンダーから指定日付をクリック
+              console.log('カレンダーから指定日付をクリックします:', date);
               
-              console.log('検索結果ページ情報:', resultPageInfo);
-              
-              // 検索結果ページの詳細な内容を出力
-              const pageContent = await page.evaluate(() => {
-                const bodyText = document.body.textContent || '';
-                const tables = Array.from(document.querySelectorAll('table')).map(table => ({
-                  rows: table.querySelectorAll('tr').length,
-                  cells: Array.from(table.querySelectorAll('td, th')).slice(0, 10).map(cell => cell.textContent?.trim())
-                }));
+              const calendarClickResult = await page.evaluate((targetDate) => {
+                // 指定日付を解析
+                const dateObj = new Date(targetDate);
+                const day = dateObj.getDate().toString();
                 
-                return {
-                  bodyTextSample: bodyText.substring(0, 1000),
-                  tablesInfo: tables
-                };
-              });
+                console.log('カレンダーで探す日付:', day);
+                
+                // カレンダー内の日付リンクを探す
+                const calendarLinks = Array.from(document.querySelectorAll('a, td, .calendar a, .cal-day, [class*="day"], [class*="date"]'));
+                
+                console.log('カレンダー要素数:', calendarLinks.length);
+                
+                for (const link of calendarLinks) {
+                  const text = link.textContent?.trim() || '';
+                  const href = (link as HTMLAnchorElement).href || '';
+                  const className = (link as HTMLElement).className || '';
+                  
+                  console.log('カレンダー要素チェック:', { text, href, className });
+                  
+                  // 日付とマッチする要素を探す
+                  if (text === day || text === day.padStart(2, '0')) {
+                    console.log('対象日付の要素発見:', { text, href, className });
+                    
+                    // クリック可能かチェック
+                    if (href || (link as HTMLElement).onclick || className.includes('clickable') || className.includes('available')) {
+                      console.log('クリック可能な日付要素をクリック:', text);
+                      (link as HTMLElement).click();
+                      return { success: true, day: text };
+                    }
+                  }
+                }
+                
+                // より広範囲に検索（td内の日付）
+                const tableCells = Array.from(document.querySelectorAll('td'));
+                for (const cell of tableCells) {
+                  const text = cell.textContent?.trim() || '';
+                  if (text === day) {
+                    const link = cell.querySelector('a');
+                    if (link) {
+                      console.log('テーブルセル内の日付リンクをクリック:', text);
+                      link.click();
+                      return { success: true, day: text };
+                    } else if (cell.onclick || cell.style.cursor === 'pointer') {
+                      console.log('クリック可能なセルをクリック:', text);
+                      cell.click();
+                      return { success: true, day: text };
+                    }
+                  }
+                }
+                
+                return { success: false, message: '指定日付がカレンダーで見つかりません' };
+              }, date);
               
-              console.log('検索結果ページの詳細:', pageContent);
+              console.log('カレンダークリック結果:', calendarClickResult);
+              
+              if (calendarClickResult.success) {
+                // カレンダークリック後にページの変更を待つ
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                console.log('カレンダー日付クリック完了、ページ更新を待機中...');
+              } else {
+                console.log('カレンダー日付クリックに失敗:', calendarClickResult.message);
+              }
+              
+              // 全ページの施設データを取得
+              console.log('全ページの施設データ取得を開始します');
+              const allFacilities: Array<{ name: string; availability: string; status: string }> = [];
+              let currentPage = 1;
+              let hasNextPage = true;
+              
+              while (hasNextPage) {
+                console.log(`ページ${currentPage}のデータを取得中...`);
+                
+                // 現在のページから施設データを抽出（画像ベースの空き状況対応）
+                const pageData = await page.evaluate((targetDate) => {
+                  const facilities: Array<{ name: string; availability: string; status: string }> = [];
+                  
+                  console.log('=== 画像ベース空き状況解析を開始 ===');
+                  console.log('対象日付:', targetDate);
+                  console.log('現在のURL:', location.href);
+                  
+                  // 空きセルを処理する共通関数
+                  function processAvailableCell(cell: Element, index: number) {
+                    console.log(`=== 空きセル${index + 1}の解析 ===`);
+                    
+                    // セルを含む行を特定
+                    const row = cell.closest('tr');
+                    if (!row) {
+                      console.log('行が見つかりません');
+                      return;
+                    }
+                    
+                    // セルを含むテーブルを特定
+                    const table = cell.closest('table');
+                    if (!table) {
+                      console.log('テーブルが見つかりません');
+                      return;
+                    }
+                    
+                    console.log('セル内容:', cell.textContent?.trim());
+                    console.log('行内容:', row.textContent?.trim());
+                    
+                    // 施設名を探す（同じテーブル内の●付きの行から）
+                    let facilityName = '';
+                    const tableRows = table.querySelectorAll('tr');
+                    
+                    for (const tableRow of tableRows) {
+                      const rowText = tableRow.textContent?.trim() || '';
+                      if (rowText.includes('●') && (rowText.includes('体育館') || rowText.includes('生涯学習') || rowText.includes('ホール') || rowText.includes('中学校'))) {
+                        const facilityMatch = rowText.match(/●([^●]+)/);
+                        if (facilityMatch) {
+                          facilityName = facilityMatch[1].trim();
+                          break;
+                        }
+                      }
+                    }
+                    
+                    if (!facilityName) {
+                      // ●が見つからない場合は、テーブル内の体育館等のキーワードから推測
+                      const tableText = table.textContent || '';
+                      if (tableText.includes('刈谷南中学校')) {
+                        facilityName = '刈谷南中学校';
+                      } else if (tableText.includes('刈谷南中体育館')) {
+                        facilityName = '刈谷南中体育館';
+                      } else if (tableText.includes('北部生涯学習センター')) {
+                        facilityName = '北部生涯学習センター／体育室';
+                      } else if (tableText.includes('南部生涯学習センター')) {
+                        facilityName = '南部生涯学習センター／多目的ホール';
+                      } else if (tableText.includes('体育館')) {
+                        facilityName = '体育館';
+                      } else if (tableText.includes('中学校')) {
+                        facilityName = '中学校';
+                      } else {
+                        facilityName = '不明な施設';
+                      }
+                    }
+                    
+                    console.log('検出された施設名:', facilityName);
+                    
+                    // 時間帯の特定（time-table1, time-table2クラスまたは行内容から）
+                    let timeSlot = '';
+                    
+                    // セルのクラスをチェック
+                    const cellClasses = cell.className || '';
+                    console.log('セルのクラス:', cellClasses);
+                    
+                    if (cellClasses.includes('time-table1') || cellClasses.includes('time-table2')) {
+                      // time-tableクラスに対応する時間を特定
+                      const rowCells = row.querySelectorAll('td, th');
+                      const firstCell = rowCells[0];
+                      if (firstCell) {
+                        timeSlot = firstCell.textContent?.trim() || '';
+                      }
+                    }
+                    
+                    // 時間帯が特定できない場合は、行の最初のセルから推測
+                    if (!timeSlot) {
+                      const rowCells = row.querySelectorAll('td, th');
+                      const firstCell = rowCells[0];
+                      if (firstCell) {
+                        const firstCellText = firstCell.textContent?.trim() || '';
+                        if (firstCellText.includes('午前') || firstCellText.includes('午後') || firstCellText.includes('夜間') || firstCellText.match(/\d{1,2}:\d{2}/)) {
+                          timeSlot = firstCellText;
+                        }
+                      }
+                    }
+                    
+                    // セルの位置から時間帯を推測
+                    if (!timeSlot) {
+                      const rowCells = Array.from(row.querySelectorAll('td, th'));
+                      const cellIndex = rowCells.indexOf(cell);
+                      
+                      // よくあるパターンに基づく推測
+                      if (cellIndex === 1) {
+                        timeSlot = '午前 9:00～12:00';
+                      } else if (cellIndex === 2) {
+                        timeSlot = '午後１ 12:00～15:00';
+                      } else if (cellIndex === 3) {
+                        timeSlot = '午後２ 15:00～18:00';
+                      } else if (cellIndex === 4) {
+                        timeSlot = '夜間 18:00～21:00';
+                      } else {
+                        timeSlot = `時間帯${cellIndex}`;
+                      }
+                    }
+                    
+                    console.log('検出された時間帯:', timeSlot);
+                    
+                    // 空き施設として追加
+                    facilities.push({
+                      name: `${facilityName}（${timeSlot}）`,
+                      availability: '空きあり',
+                      status: 'available'
+                    });
+                    
+                    console.log(`*** 空き施設追加: ${facilityName}（${timeSlot}）`);
+                  }
+                  
+                  // alt="空き"の画像を持つセルを探す（複数のパターンに対応）
+                  const availableImages = Array.from(document.querySelectorAll('img[alt="空き"], img[alt="○"], img[alt="空"], img[src*="空き"], img[src*="available"]'));
+                  console.log(`空き画像の数: ${availableImages.length}`);
+                  
+                  // 画像がない場合は、テキストベースで空き状況を探す
+                  if (availableImages.length === 0) {
+                    console.log('画像ベースの空き状況が見つからないため、テキストベースで検索します');
+                    const availableCells = Array.from(document.querySelectorAll('td')).filter(cell => {
+                      const text = cell.textContent?.trim() || '';
+                      return text.includes('空き') || text.includes('○') || text.includes('空') || text === '◯';
+                    });
+                    console.log(`テキストベースの空きセル数: ${availableCells.length}`);
+                    
+                    availableCells.forEach((cell, index) => {
+                      console.log(`=== テキストベース空きセル${index + 1}の解析 ===`);
+                      console.log('セル内容:', cell.textContent?.trim());
+                      
+                      // 以下の処理は画像の場合と同じ
+                      processAvailableCell(cell, index);
+                    });
+                  }
+                  
+                  availableImages.forEach((img, index) => {
+                    console.log(`=== 空き画像${index + 1}の解析 ===`);
+                    console.log('画像src:', (img as HTMLImageElement).src);
+                    console.log('画像alt:', (img as HTMLImageElement).alt);
+                    
+                    // 画像を含むセルを特定
+                    const cell = img.closest('td');
+                    if (!cell) {
+                      console.log('セルが見つかりません');
+                      return;
+                    }
+                    
+                    processAvailableCell(cell, index);
+                  });
+                  
+                  // 満室画像の情報をログに出力（参考用）
+                  const unavailableImages = Array.from(document.querySelectorAll('img[alt="満室"], img[alt="×"]'));
+                  console.log(`満室画像の数: ${unavailableImages.length}`);
+                  
+                  console.log(`=== 最終結果: ${facilities.length}件の空き施設 ===`);
+                  facilities.forEach(facility => {
+                    console.log(`  ${facility.name}: ${facility.availability}`);
+                  });
+                  
+                  return facilities;
+                }, date);
+                allFacilities.push(...pageData);
+                
+                console.log(`ページ${currentPage}: ${pageData.length}件の施設データを取得`);
+                
+                // 次のページへのリンクを探す
+                const nextPageResult = await page.evaluate(() => {
+                  // 「次の5件」や「>」ボタンを探す
+                  const nextButtons = Array.from(document.querySelectorAll('a, button, input')).filter(element => {
+                    const text = element.textContent?.trim() || '';
+                    const value = (element as HTMLInputElement).value || '';
+                    return text.includes('次の') || text.includes('次へ') || text === '>' || 
+                           value.includes('次の') || value.includes('次へ') || value === '>';
+                  });
+                  
+                  console.log(`次ページボタン候補: ${nextButtons.length}個発見`);
+                  
+                  for (const button of nextButtons) {
+                    const text = button.textContent?.trim() || '';
+                    const value = (button as HTMLInputElement).value || '';
+                    const href = (button as HTMLAnchorElement).href || '';
+                    
+                    console.log('次ページボタンチェック:', { text, value, href });
+                    
+                    // クリック可能で、無効化されていないボタンを探す
+                    if ((button as HTMLButtonElement).disabled === false || 
+                        !(button as HTMLElement).classList.contains('disabled')) {
+                      console.log('次ページボタンをクリック:', text || value);
+                      (button as HTMLElement).click();
+                      return { success: true, clicked: text || value };
+                    }
+                  }
+                  
+                  console.log('次ページボタンが見つからないか、すべて無効化されています');
+                  return { success: false, message: '次ページが存在しません' };
+                });
+                
+                if (nextPageResult.success) {
+                  console.log('次ページへ移動しました:', nextPageResult.clicked);
+                  // ページ読み込みを待つ
+                  await new Promise(resolve => setTimeout(resolve, 3000));
+                  currentPage++;
+                } else {
+                  console.log('全ページの取得が完了しました');
+                  hasNextPage = false;
+                }
+                
+                // 安全のため、最大10ページまでとする
+                if (currentPage > 10) {
+                  console.log('最大ページ数に達したため、処理を終了します');
+                  hasNextPage = false;
+                }
+              }
+              
+              console.log(`全${currentPage - 1}ページから合計${allFacilities.length}件の施設データを取得しました`);
+              
+              // 重複を除去
+              const uniqueFacilities = allFacilities.filter((facility, index, self) => 
+                index === self.findIndex(f => f.name === facility.name && f.availability === facility.availability)
+              );
+              
+              console.log(`重複除去後: ${uniqueFacilities.length}件の施設データ`);
+              
+              await browser.close();
+              
+              return NextResponse.json({
+                success: true,
+                date,
+                facilities: uniqueFacilities
+              });
             } else {
               console.log('検索ボタンが見つかりませんでした');
+              await browser.close();
+              
+              return NextResponse.json({
+                success: true,
+                date,
+                facilities: []
+              });
             }
           }
         }
-        
-        // 結果ページでのデータ抽出
-        const facilityData = await page.evaluate(() => {
-          const facilities: Array<{ name: string; availability: string; status: string }> = [];
-          
-          // 現在のページのタイトルとURLを確認
-          console.log('現在のページ:', document.title, location.href);
-          
-          // 複数のパターンでテーブルやリストを探す
-          const containers = document.querySelectorAll('table, #calendar, .calendar, .result, .facility-list, .search-result, .rsv-list');
-          
-          console.log(`発見されたコンテナ数: ${containers.length}`);
-          
-          for (const container of containers) {
-            console.log('コンテナ解析中:', container.className, container.id);
-            
-            // テーブル形式の処理
-            const rows = container.querySelectorAll('tr');
-            if (rows.length > 0) {
-              console.log(`テーブル発見 - 行数: ${rows.length}`);
-              
-              for (let i = 0; i < rows.length; i++) {
-                const cells = rows[i].querySelectorAll('td, th');
-                if (cells.length >= 2) {
-                  const firstCell = cells[0]?.textContent?.trim();
-                  const secondCell = cells[1]?.textContent?.trim();
-                  
-                  // 施設名らしいものを検出
-                  if (firstCell && secondCell && 
-                      (firstCell.includes('体育館') || firstCell.includes('アリーナ') || 
-                       firstCell.includes('コート') || firstCell.includes('ホール'))) {
-                    facilities.push({
-                      name: firstCell,
-                      availability: secondCell,
-                      status: secondCell.includes('×') || secondCell.includes('満') || 
-                              secondCell.includes('不可') ? 'unavailable' : 'available'
-                    });
-                  }
-                }
-              }
-            }
-            
-            // リスト形式の処理
-            const listItems = container.querySelectorAll('li, .facility-item, .rsv-item');
-            for (const item of listItems) {
-              const text = item.textContent?.trim();
-              if (text && (text.includes('体育館') || text.includes('アリーナ') || 
-                          text.includes('コート') || text.includes('ホール'))) {
-                const nameMatch = text.match(/([^：]+(?:体育館|アリーナ|コート|ホール)[^：]*)/);
-                const statusMatch = text.match(/(空き|満|×|○|利用可|利用不可)/);
-                
-                if (nameMatch) {
-                  facilities.push({
-                    name: nameMatch[1],
-                    availability: statusMatch ? statusMatch[1] : text,
-                    status: statusMatch && (statusMatch[1].includes('×') || statusMatch[1].includes('満') || 
-                            statusMatch[1].includes('不可')) ? 'unavailable' : 'available'
-                  });
-                }
-              }
-            }
-          }
-          
-          // 結果が見つからない場合は、ページ全体から施設情報を探す
-          if (facilities.length === 0) {
-            console.log('施設データが見つからないため、ページ全体を検索します');
-            
-            // カレンダー形式のデータを探す
-            const calendarData = Array.from(document.querySelectorAll('td, .cal-cell, .date-cell')).map(cell => {
-              const text = cell.textContent?.trim() || '';
-              const hasTimeSlot = text.match(/\d{1,2}:\d{2}/);
-              const hasStatus = text.includes('○') || text.includes('×') || text.includes('△');
-              
-              if (hasTimeSlot && hasStatus && text.length < 50) {
-                return {
-                  name: `刈谷市体育館（${text.match(/\d{1,2}:\d{2}[-~]\d{1,2}:\d{2}/) || 'バドミントン'}）`,
-                  availability: text,
-                  status: text.includes('×') ? 'unavailable' : 'available'
-                };
-              }
-              return null;
-            }).filter((item): item is { name: string; availability: string; status: string } => item !== null);
-            
-            facilities.push(...calendarData);
-            
-            // テーブル内の時間枠データを探す
-            const timeSlotData = Array.from(document.querySelectorAll('tr')).map(row => {
-              const cells = row.querySelectorAll('td, th');
-              if (cells.length >= 2) {
-                const timeCell = cells[0]?.textContent?.trim() || '';
-                const statusCell = cells[1]?.textContent?.trim() || '';
-                
-                // 時間枠データらしいものを検出
-                if (timeCell.match(/\d{1,2}:\d{2}/) && (statusCell.includes('○') || statusCell.includes('×') || statusCell.includes('△'))) {
-                  return {
-                    name: `バドミントン（${timeCell}）`,
-                    availability: statusCell,
-                    status: statusCell.includes('×') ? 'unavailable' : 'available'
-                  };
-                }
-              }
-              return null;
-            }).filter((item): item is { name: string; availability: string; status: string } => item !== null);
-            
-            facilities.push(...timeSlotData);
-            
-            // 一般的な施設情報を探す
-            if (facilities.length === 0) {
-              const allText = document.body.textContent || '';
-              const lines = allText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
-              
-              for (const line of lines) {
-                if ((line.includes('体育館') || line.includes('アリーナ') || 
-                     line.includes('コート') || line.includes('ホール') ||
-                     line.includes('バドミントン')) && 
-                    line.length < 100) { // 長すぎる説明文は除外
-                  facilities.push({
-                    name: line,
-                    availability: '確認が必要',
-                    status: 'available'
-                  });
-                }
-              }
-            }
-            
-            
-            // デバッグ情報を追加
-            console.log('最終的な施設データ数:', facilities.length);
-            if (facilities.length > 0) {
-              console.log('施設データサンプル:', facilities.slice(0, 3));
-            }
-          }
-          
-          return facilities;
-        });
-        
-        await browser.close();
-        
-        return NextResponse.json({
-          success: true,
-          date,
-          facilities: facilityData
-        });
         
       } catch (scrapeError) {
         await browser.close();
