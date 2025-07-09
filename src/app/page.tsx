@@ -114,12 +114,9 @@ export default function Home() {
                             : 'bg-red-100 text-red-800'
                         }`}
                       >
-                        {facility.status === 'available' ? '空きあり' : '空きなし'}
+                        {facility.availability}
                       </span>
                     </div>
-                    <p className="text-gray-600 mt-2">
-                      状況: {facility.availability}
-                    </p>
                   </div>
                 ))
               ) : (

@@ -380,8 +380,8 @@ export async function GET(request: Request) {
               console.log('カレンダークリック結果:', calendarClickResult);
               
               if (calendarClickResult.success) {
-                // カレンダークリック後にページの変更を待つ
-                await new Promise(resolve => setTimeout(resolve, 2000));
+                // カレンダークリック後にページの変更を待つ（高速化）
+                await new Promise(resolve => setTimeout(resolve, 1000));
                 console.log('カレンダー日付クリック完了、ページ更新を待機中...');
               } else {
                 console.log('カレンダー日付クリックに失敗:', calendarClickResult.message);
@@ -396,175 +396,164 @@ export async function GET(request: Request) {
               while (hasNextPage) {
                 console.log(`ページ${currentPage}のデータを取得中...`);
                 
-                // 現在のページから施設データを抽出（画像ベースの空き状況対応）
+                // 現在のページから施設データを抽出（元の動作するロジック）
                 const pageData = await page.evaluate((targetDate) => {
                   const facilities: Array<{ name: string; availability: string; status: string }> = [];
                   
-                  console.log('=== 画像ベース空き状況解析を開始 ===');
-                  console.log('対象日付:', targetDate);
-                  console.log('現在のURL:', location.href);
+                  // 実際に表示されている日付を確認
+                  const pageText = document.body.textContent || '';
+                  const dateMatch = pageText.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+                  if (dateMatch) {
+                    const [, year, month, day] = dateMatch;
+                    console.log(`実際の表示日付: ${year}年${month}月${day}日`);
+                    console.log(`要求された日付: ${targetDate}`);
+                  }
+                  
+                  // 南部生涯学習センター関連のデバッグ
+                  const allCells = Array.from(document.querySelectorAll('td'));
+                  const southCenterCells = allCells.filter(cell => {
+                    const tableText = cell.closest('table')?.textContent || '';
+                    return tableText.includes('南部生涯学習センター');
+                  });
+                  
+                  console.log(`南部生涯学習センター関連セル数: ${southCenterCells.length}`);
+                  southCenterCells.forEach((cell, index) => {
+                    console.log(`南部セル${index + 1}: ${cell.textContent?.trim()}`);
+                  });
                   
                   // 空きセルを処理する共通関数
                   function processAvailableCell(cell: Element, index: number) {
-                    console.log(`=== 空きセル${index + 1}の解析 ===`);
-                    
-                    // セルを含む行を特定
                     const row = cell.closest('tr');
-                    if (!row) {
-                      console.log('行が見つかりません');
-                      return;
-                    }
+                    if (!row) return;
                     
-                    // セルを含むテーブルを特定
                     const table = cell.closest('table');
-                    if (!table) {
-                      console.log('テーブルが見つかりません');
-                      return;
-                    }
+                    if (!table) return;
                     
-                    console.log('セル内容:', cell.textContent?.trim());
-                    console.log('行内容:', row.textContent?.trim());
-                    
-                    // 施設名を探す（同じテーブル内の●付きの行から）
+                    // 施設名を探す（より幅広く検出）
                     let facilityName = '';
                     const tableRows = table.querySelectorAll('tr');
                     
                     for (const tableRow of tableRows) {
                       const rowText = tableRow.textContent?.trim() || '';
-                      if (rowText.includes('●') && (rowText.includes('体育館') || rowText.includes('生涯学習') || rowText.includes('ホール') || rowText.includes('中学校'))) {
+                      if (rowText.includes('●') && (rowText.includes('体育館') || rowText.includes('アリーナ') || rowText.includes('生涯学習センター') || rowText.includes('ホール'))) {
                         const facilityMatch = rowText.match(/●([^●]+)/);
                         if (facilityMatch) {
-                          facilityName = facilityMatch[1].trim();
+                          // 時間帯情報を除去して施設名のみを抽出
+                          facilityName = facilityMatch[1].trim()
+                            .replace(/\s+/g, ' ')
+                            .replace(/午前.*?～.*?$/, '')
+                            .replace(/午後.*?～.*?$/, '')
+                            .replace(/夜間.*?～.*?$/, '')
+                            .replace(/\d{1,2}:\d{2}.*?$/, '')
+                            .trim()
+                            .substring(0, 50);
                           break;
                         }
                       }
                     }
                     
                     if (!facilityName) {
-                      // ●が見つからない場合は、テーブル内の体育館等のキーワードから推測
-                      const tableText = table.textContent || '';
-                      if (tableText.includes('刈谷南中学校')) {
-                        facilityName = '刈谷南中学校';
-                      } else if (tableText.includes('刈谷南中体育館')) {
-                        facilityName = '刈谷南中体育館';
-                      } else if (tableText.includes('北部生涯学習センター')) {
-                        facilityName = '北部生涯学習センター／体育室';
-                      } else if (tableText.includes('南部生涯学習センター')) {
-                        facilityName = '南部生涯学習センター／多目的ホール';
-                      } else if (tableText.includes('体育館')) {
-                        facilityName = '体育館';
-                      } else if (tableText.includes('中学校')) {
-                        facilityName = '中学校';
-                      } else {
-                        facilityName = '不明な施設';
-                      }
-                    }
-                    
-                    console.log('検出された施設名:', facilityName);
-                    
-                    // 時間帯の特定（time-table1, time-table2クラスまたは行内容から）
-                    let timeSlot = '';
-                    
-                    // セルのクラスをチェック
-                    const cellClasses = cell.className || '';
-                    console.log('セルのクラス:', cellClasses);
-                    
-                    if (cellClasses.includes('time-table1') || cellClasses.includes('time-table2')) {
-                      // time-tableクラスに対応する時間を特定
-                      const rowCells = row.querySelectorAll('td, th');
-                      const firstCell = rowCells[0];
-                      if (firstCell) {
-                        timeSlot = firstCell.textContent?.trim() || '';
-                      }
-                    }
-                    
-                    // 時間帯が特定できない場合は、行の最初のセルから推測
-                    if (!timeSlot) {
-                      const rowCells = row.querySelectorAll('td, th');
-                      const firstCell = rowCells[0];
-                      if (firstCell) {
-                        const firstCellText = firstCell.textContent?.trim() || '';
-                        if (firstCellText.includes('午前') || firstCellText.includes('午後') || firstCellText.includes('夜間') || firstCellText.match(/\d{1,2}:\d{2}/)) {
-                          timeSlot = firstCellText;
+                      const allTableText = table.textContent?.trim() || '';
+                      const facilityPatterns = [
+                        /ウィングアリーナ刈谷[^\n]*[A-Z０-９]/,
+                        /刈谷市体育館[^\n]*[A-Z０-９]/,
+                        /[^\n]*体育館[^\n]*[A-Z０-９]/,
+                        /[^\n]*アリーナ[^\n]*[A-Z０-９]/,
+                        /[^\n]*生涯学習センター[^\n]*[A-Z０-９]/,
+                        /[^\n]*ホール[^\n]*[A-Z０-９]/
+                      ];
+                      
+                      for (const pattern of facilityPatterns) {
+                        const match = allTableText.match(pattern);
+                        if (match) {
+                          facilityName = match[0].trim().replace(/\s+/g, ' ').substring(0, 50);
+                          break;
                         }
                       }
                     }
                     
-                    // セルの位置から時間帯を推測
-                    if (!timeSlot) {
-                      const rowCells = Array.from(row.querySelectorAll('td, th'));
-                      const cellIndex = rowCells.indexOf(cell);
-                      
-                      // よくあるパターンに基づく推測
-                      if (cellIndex === 1) {
-                        timeSlot = '午前 9:00～12:00';
-                      } else if (cellIndex === 2) {
-                        timeSlot = '午後１ 12:00～15:00';
-                      } else if (cellIndex === 3) {
-                        timeSlot = '午後２ 15:00～18:00';
-                      } else if (cellIndex === 4) {
-                        timeSlot = '夜間 18:00～21:00';
-                      } else {
-                        timeSlot = `時間帯${cellIndex}`;
+                    if (!facilityName) return;
+                    
+                    // 時間帯の特定（より正確に）
+                    let timeSlot = '';
+                    
+                    // セルの位置から正確に時間帯を特定
+                    const rowCells = Array.from(row.querySelectorAll('td, th'));
+                    const cellIndex = rowCells.indexOf(cell);
+                    
+                    console.log(`セルインデックス: ${cellIndex}, 行内容: ${row.textContent?.trim().substring(0, 100)}`);
+                    console.log(`施設名: ${facilityName}`);
+                    console.log(`セル内容: ${cell.textContent?.trim()}`);
+                    
+                    // テーブルヘッダーから時間帯を特定
+                    const parentTable = cell.closest('table');
+                    if (parentTable) {
+                      const headerRows = Array.from(parentTable.querySelectorAll('tr'));
+                      for (const headerRow of headerRows) {
+                        const headerCells = Array.from(headerRow.querySelectorAll('td, th'));
+                        if (headerCells.length > cellIndex && headerCells[cellIndex]) {
+                          const headerText = headerCells[cellIndex].textContent?.trim() || '';
+                          if (headerText.includes('午前')) {
+                            timeSlot = '午前 9:00～12:00';
+                            break;
+                          } else if (headerText.includes('午後１')) {
+                            timeSlot = '午後１ 12:00～15:00';
+                            break;
+                          } else if (headerText.includes('午後２')) {
+                            timeSlot = '午後２ 15:00～18:00';
+                            break;
+                          } else if (headerText.includes('午後')) {
+                            timeSlot = '午後 13:00～17:00';
+                            break;
+                          } else if (headerText.includes('夜間')) {
+                            timeSlot = '夜間 18:00～21:00';
+                            break;
+                          }
+                        }
                       }
                     }
                     
-                    console.log('検出された時間帯:', timeSlot);
+                    // ヘッダーから取得できない場合はセルの位置から推測
+                    if (!timeSlot) {
+                      if (cellIndex === 1) timeSlot = '午前 9:00～12:00';
+                      else if (cellIndex === 2) timeSlot = '午後１ 12:00～15:00';
+                      else if (cellIndex === 3) timeSlot = '午後２ 15:00～18:00';
+                      else if (cellIndex === 4) timeSlot = '夜間 18:00～21:00';
+                      else timeSlot = '夜間 18:00～21:00';
+                    }
                     
-                    // 空き施設として追加
+                    console.log(`決定された時間帯: ${timeSlot}`);
+                    
                     facilities.push({
-                      name: `${facilityName}（${timeSlot}）`,
+                      name: `${facilityName} ${timeSlot}`,
                       availability: '空きあり',
                       status: 'available'
                     });
-                    
-                    console.log(`*** 空き施設追加: ${facilityName}（${timeSlot}）`);
                   }
                   
-                  // alt="空き"の画像を持つセルを探す（複数のパターンに対応）
-                  const availableImages = Array.from(document.querySelectorAll('img[alt="空き"], img[alt="○"], img[alt="空"], img[src*="空き"], img[src*="available"]'));
-                  console.log(`空き画像の数: ${availableImages.length}`);
+                  // 空きを示す画像またはテキストを持つセルを探す（厳密チェック）
+                  const tableCells = Array.from(document.querySelectorAll('td'));
                   
-                  // 画像がない場合は、テキストベースで空き状況を探す
-                  if (availableImages.length === 0) {
-                    console.log('画像ベースの空き状況が見つからないため、テキストベースで検索します');
-                    const availableCells = Array.from(document.querySelectorAll('td')).filter(cell => {
-                      const text = cell.textContent?.trim() || '';
-                      return text.includes('空き') || text.includes('○') || text.includes('空') || text === '◯';
-                    });
-                    console.log(`テキストベースの空きセル数: ${availableCells.length}`);
+                  tableCells.forEach((cell, index) => {
+                    const text = cell.textContent?.trim() || '';
+                    const images = cell.querySelectorAll('img');
                     
-                    availableCells.forEach((cell, index) => {
-                      console.log(`=== テキストベース空きセル${index + 1}の解析 ===`);
-                      console.log('セル内容:', cell.textContent?.trim());
-                      
-                      // 以下の処理は画像の場合と同じ
+                    // 明確に空きを示すパターンのみ
+                    const hasAvailableImage = Array.from(images).some(img => 
+                      img.alt === '空き' || img.alt === '○'
+                    );
+                    const hasAvailableText = text === '○' || text === '◯' || text === '空き';
+                    
+                    // 明確に満室を示すパターンは除外
+                    const hasUnavailableImage = Array.from(images).some(img => 
+                      img.alt === '満室' || img.alt === '×'
+                    );
+                    const hasUnavailableText = text === '×' || text === '▲' || text === '満室' || text === '予約済';
+                    
+                    // 空きがあり、満室でない場合のみ
+                    if ((hasAvailableImage || hasAvailableText) && !hasUnavailableImage && !hasUnavailableText) {
                       processAvailableCell(cell, index);
-                    });
-                  }
-                  
-                  availableImages.forEach((img, index) => {
-                    console.log(`=== 空き画像${index + 1}の解析 ===`);
-                    console.log('画像src:', (img as HTMLImageElement).src);
-                    console.log('画像alt:', (img as HTMLImageElement).alt);
-                    
-                    // 画像を含むセルを特定
-                    const cell = img.closest('td');
-                    if (!cell) {
-                      console.log('セルが見つかりません');
-                      return;
                     }
-                    
-                    processAvailableCell(cell, index);
-                  });
-                  
-                  // 満室画像の情報をログに出力（参考用）
-                  const unavailableImages = Array.from(document.querySelectorAll('img[alt="満室"], img[alt="×"]'));
-                  console.log(`満室画像の数: ${unavailableImages.length}`);
-                  
-                  console.log(`=== 最終結果: ${facilities.length}件の空き施設 ===`);
-                  facilities.forEach(facility => {
-                    console.log(`  ${facility.name}: ${facility.availability}`);
                   });
                   
                   return facilities;
@@ -655,32 +644,6 @@ export async function GET(request: Request) {
         await browser.close();
         throw scrapeError;
       }
-    } else {
-      console.log('開発環境モードでモックデータを返します');
-      // 開発環境用モックデータ
-      const mockFacilities = [
-        {
-          name: '刈谷市体育館 アリーナ',
-          availability: '9:00-21:00 (一部空きあり)',
-          status: 'available' as const
-        },
-        {
-          name: '刈谷市総合運動公園体育館',
-          availability: '満室',
-          status: 'unavailable' as const
-        },
-        {
-          name: '小垣江東小学校体育館',
-          availability: '18:00-21:00 空きあり',
-          status: 'available' as const
-        }
-      ];
-
-      return NextResponse.json({
-        success: true,
-        date,
-        facilities: mockFacilities
-      });
     }
     
   } catch (error) {
