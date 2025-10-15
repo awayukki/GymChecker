@@ -546,7 +546,7 @@ export async function GET(request: Request) {
                     
                     // 明確に満室を示すパターンは除外
                     const hasUnavailableImage = Array.from(images).some(img => 
-                      img.alt === '満室' || img.alt === '×'
+                      img.alt === '予約済' || img.alt === '×'
                     );
                     const hasUnavailableText = text === '×' || text === '▲' || text === '満室' || text === '予約済';
                     
@@ -558,6 +558,7 @@ export async function GET(request: Request) {
                   
                   return facilities;
                 }, date);
+                console.log(`${pageData}`)
                 allFacilities.push(...pageData);
                 
                 console.log(`ページ${currentPage}: ${pageData.length}件の施設データを取得`);
