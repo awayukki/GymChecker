@@ -39,6 +39,6 @@ next-env.d.ts
 temp/
 
 # docker
-.dockerignore
-Dockerfile
-docker-compose.yml
+#.dockerignore
+#Dockerfile
+#docker-compose.yml
